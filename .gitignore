@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Floders
+results/
+
+# Mac files
+.DS_Store
