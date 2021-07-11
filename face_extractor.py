@@ -1,4 +1,5 @@
 import os
+from tqdm import tqdm
 import numpy as np
 import scipy
 import scipy.ndimage
@@ -7,6 +8,7 @@ import imageio
 import matplotlib.pyplot as plt
 import cv2
 import face_alignment
+from youtubedl import YouTubeDownloader
 
 class FaceExtrator:
     def __init__(self, output_size=1024, transform_size=4096, device='cpu', face_detector='sfd'):
@@ -24,36 +26,51 @@ class FaceExtrator:
                 PIL.Image.fromarray(result['faces'][face_idx]).save(f'{file_path[:-4]}_{face_idx}.png')
             if 'vis' in result.keys():
                 PIL.Image.fromarray(result['vis']).save(f'{file_path[:-4]}_vis.png')
-        if file_path.endswith('.mp4'):
+        elif file_path.endswith('.mp4'):
             reader = imageio.get_reader(file_path)
             fps = reader.get_meta_data()['fps']
             writer = imageio.get_writer(f'{file_path[:-4]}_vis.mp4', fps=5)
-            for frame_idx, image in enumerate(reader):
-                if frame_idx % 10 != 0:
-                    continue
-                result = self.__extract_faces_from_image(image, vis=True)
-                # for face_idx in range(result['n_faces']):
-                #     PIL.Image.fromarray(result['faces'][face_idx]).save(f'{file_path[:-4]}_{frame_idx}_{face_idx}.png')
-                if 'vis' in result.keys():
-                    PIL.Image.fromarray(result['vis']).save(f'{file_path[:-4]}_{frame_idx}_vis.png')
-                    writer.append_data(result['vis'])
-            writer.close()
+            with tqdm(total=reader.count_frames()) as pbar:
+                for frame_idx, image in enumerate(reader):
+                    if frame_idx % 10 != 0:
+                        pbar.update(1)
+                        continue
+                    result = self.__extract_faces_from_image(image, vis=True)
+                    # for face_idx in range(result['n_faces']):
+                    #     PIL.Image.fromarray(result['faces'][face_idx]).save(f'{file_path[:-4]}_{frame_idx}_{face_idx}.png')
+                    if 'vis' in result.keys():
+                        # PIL.Image.fromarray(result['vis']).save(f'{file_path[:-4]}_{frame_idx}_vis.png')
+                        writer.append_data(result['vis'])
+                    pbar.update(1)
+                writer.close()
+        elif file_path.startswith('https://www.youtube.com/watch?v='):
+            yt_dl = YouTubeDownloader()
+            yt_dl.download(file_path)
+            self.get_faces(f"results/{file_path.replace('https://www.youtube.com/watch?v=', '')}.mp4")
 
     def __extract_faces_from_image(self, image, vis=False):
         result = {}
-        preds = self.fa.get_landmarks(image, return_bboxes=True)
+        image_det = PIL.Image.fromarray(image)
+        det_scale = 1
+        while image.shape[1] * 1.0 / det_scale > 1500:
+            det_scale *= 2
+        image_det = image_det.resize((int(image_det.size[0] *1.0 / det_scale), int(image_det.size[1] * 1.0 / det_scale)))
+        image_det = np.array(image_det)
+        preds = self.fa.get_landmarks(image_det, return_bboxes=True)
         if preds == None:
-            result['n_faces'] = 0 
-            if vis==True: 
+            result['n_faces'] = 0
+            if vis==True:
                 result['vis'] = np.copy(image)
         else:
             landmarks, bboxes = preds
+            landmarks = np.stack(landmarks) * det_scale
+            bboxes = np.stack(bboxes) * det_scale
+            # import pdb; pdb.set_trace()
             result['landmarks'] = landmarks
             result['bboxes'] = bboxes
             result['n_faces'] = len(landmarks)
-            # import pdb; pdb.set_trace()
             result['faces'] = []
-            if vis==True: 
+            if vis==True:
                 result['vis'] = FaceExtrator.vis(np.copy(image), landmarks, bboxes)
             for idx in range(result['n_faces']):
                 result['faces'].append(self.__extract_face(np.copy(image), landmarks[idx], bboxes[idx]))
@@ -116,12 +133,12 @@ class FaceExtrator:
             image += (np.median(image, axis=(0,1)) - image) * np.clip(mask, 0.0, 1.0)
             image = PIL.Image.fromarray(np.uint8(np.clip(np.rint(image), 0, 255)), 'RGB')
             quad += pad[:2]
-    
+
         # Transform.
         image = image.transform((self.transform_size, self.transform_size), PIL.Image.QUAD, (quad + 0.5).flatten(), PIL.Image.BILINEAR)
         if self.output_size < self.transform_size:
             image = image.resize((self.output_size, self.output_size), PIL.Image.ANTIALIAS)
-        
+
         return np.array(image)
 
     @staticmethod
@@ -135,4 +152,7 @@ class FaceExtrator:
 
 if __name__ == "__main__":
     fe = FaceExtrator()
-    fe.get_faces('./results/girls.jpg')
+    # fe.get_faces('./results/girls.jpg')
+    fe.get_faces('results/Interview with My Twin Brother.mp4')
+    # fe.get_faces('https://www.youtube.com/watch?v=8ZKzx1C4-DY')
+
