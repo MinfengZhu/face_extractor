@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import cv2
 import face_alignment
 from youtubedl import YouTubeDownloader
+import motrackers
 
 class FaceExtrator:
     def __init__(self, output_size=1024, transform_size=4096, device='cpu', face_detector='sfd'):
@@ -17,63 +18,107 @@ class FaceExtrator:
         self.device = device
         self.face_detector = face_detector
         self.fa = face_alignment.FaceAlignment(face_alignment.LandmarksType._2D, device=self.device, face_detector=self.face_detector)
+        self.tracker = motrackers.SORT(max_lost=3, tracker_output_format='mot_challenge', iou_threshold=0.3)
 
-    def get_faces(self, file_path):
-        if file_path.endswith('.jpg') or file_path.endswith('.png'):
-            image = np.array(PIL.Image.open(file_path))
+    def get_faces(self, filepath):
+        if filepath.endswith('.jpg') or filepath.endswith('.png'):
+            image = np.array(PIL.Image.open(filepath))
             result = self.__extract_faces_from_image(image, vis=True)
             for face_idx in range(result['n_faces']):
                 PIL.Image.fromarray(result['faces'][face_idx]).save(f'{file_path[:-4]}_{face_idx}.png')
             if 'vis' in result.keys():
                 PIL.Image.fromarray(result['vis']).save(f'{file_path[:-4]}_vis.png')
-        elif file_path.endswith('.mp4'):
-            reader = imageio.get_reader(file_path)
+        elif filepath.endswith('.mp4') or filepath.endswith('.webm') or filepath.endswith('.avi'):
+            ext = filepath.split('.')[-1]
+            filename = filepath[:-len(ext)]
+            reader = imageio.get_reader(filepath)
             fps = reader.get_meta_data()['fps']
-            writer = imageio.get_writer(f'{file_path[:-4]}_vis.mp4', fps=5)
+            writer = imageio.get_writer(f'{filename}_vis.mp4', fps=5, quality=10, format='FFMPEG', codec='libx265', pixelformat='yuv444p')
+            self.filename = filename
+            self.face_writers = []
             with tqdm(total=reader.count_frames()) as pbar:
                 for frame_idx, image in enumerate(reader):
-                    if frame_idx % 10 != 0:
+                    if frame_idx < 500 or frame_idx > 1000 or frame_idx % 10 !=0:
                         pbar.update(1)
                         continue
                     result = self.__extract_faces_from_image(image, vis=True)
+
                     # for face_idx in range(result['n_faces']):
-                    #     PIL.Image.fromarray(result['faces'][face_idx]).save(f'{file_path[:-4]}_{frame_idx}_{face_idx}.png')
+                        # PIL.Image.fromarray(result['faces'][face_idx]).save(f'{filename}_{frame_idx}_{face_idx}.png')
                     if 'vis' in result.keys():
-                        # PIL.Image.fromarray(result['vis']).save(f'{file_path[:-4]}_{frame_idx}_vis.png')
+                        PIL.Image.fromarray(result['vis']).save(f'{filename}_{frame_idx}_vis.png')
                         writer.append_data(result['vis'])
                     pbar.update(1)
                 writer.close()
-        elif file_path.startswith('https://www.youtube.com/watch?v='):
+                for face_writer in self.face_writers:
+                    face_writer.close()
+        elif filepath.startswith('https://www.youtube.com/watch?v='):
             yt_dl = YouTubeDownloader()
-            yt_dl.download(file_path)
-            self.get_faces(f"results/{file_path.replace('https://www.youtube.com/watch?v=', '')}.mp4")
-
-    def __extract_faces_from_image(self, image, vis=False):
-        result = {}
+            filepath = yt_dl.download(filepath)
+            self.get_faces(filepath)
+            #self.get_faces(f"results/{file_path.replace('https://www.youtube.com/watch?v=', '')}.mp4")
+    
+    def __face_detection(self, image):
         image_det = PIL.Image.fromarray(image)
         det_scale = 1
         while image.shape[1] * 1.0 / det_scale > 1500:
             det_scale *= 2
         image_det = image_det.resize((int(image_det.size[0] *1.0 / det_scale), int(image_det.size[1] * 1.0 / det_scale)))
         image_det = np.array(image_det)
-        preds = self.fa.get_landmarks(image_det, return_bboxes=True)
-        if preds == None:
+        bboxes = self.fa.face_detector.detect_from_image(np.copy(image_det))
+        if bboxes is None:
+            return bboxes
+        else:
+            bboxes = np.stack(bboxes)
+            bboxes[:,:4] = bboxes[:,:4] * det_scale
+            return bboxes
+
+    def __landmark_detection(self, image, bboxes):
+        image_det = PIL.Image.fromarray(image)
+        det_scale = 1
+        while image.shape[1] * 1.0 / det_scale > 1500:
+            det_scale *= 2
+        image_det = image_det.resize((int(image_det.size[0] *1.0 / det_scale), int(image_det.size[1] * 1.0 / det_scale)))
+        image_det = np.array(image_det)
+        landmarks = self.fa.get_landmarks(np.copy(image_det), detected_faces=bboxes / det_scale)
+        landmarks *= det_scale
+        return landmarks
+       
+    def __extract_faces_from_image(self, image, vis=False):
+        result = {}
+        bboxes = self.__face_detection(np.copy(image))
+        if bboxes is None:
             result['n_faces'] = 0
             if vis==True:
                 result['vis'] = np.copy(image)
         else:
-            landmarks, bboxes = preds
-            landmarks = np.stack(landmarks) * det_scale
-            bboxes = np.stack(bboxes) * det_scale
-            # import pdb; pdb.set_trace()
+            detection_bboxes = bboxes[:,:4]
+            detection_confidences = bboxes[:,4:]
+            detection_class_ids = np.zeros_like(detection_confidences)
+            output_tracks = self.tracker.update(detection_bboxes, detection_confidences, detection_class_ids)
+            refined_bboxes = []
+            for track in output_tracks:
+                frame, id, bb_left, bb_top, bb_width, bb_height, confidence, x, y, z = track
+                assert len(track) == 10
+                refined_bboxes.append([bb_left, bb_top, bb_width, bb_height])
+                if id >= len(self.face_writers):
+                    self.face_writers.append(imageio.get_writer(f'{self.filename}_face{id}.mp4', fps=1, quality=10, format='FFMPEG', codec='libx265', pixelformat='yuv444p'))
+            refined_bboxes = np.array(refined_bboxes)  
+            landmarks = self.__landmark_detection(np.copy(image), refined_bboxes)
+
+
             result['landmarks'] = landmarks
-            result['bboxes'] = bboxes
+            result['bboxes'] = refined_bboxes
             result['n_faces'] = len(landmarks)
             result['faces'] = []
             if vis==True:
-                result['vis'] = FaceExtrator.vis(np.copy(image), landmarks, bboxes)
-            for idx in range(result['n_faces']):
-                result['faces'].append(self.__extract_face(np.copy(image), landmarks[idx], bboxes[idx]))
+                result['vis'] = FaceExtrator.vis(np.copy(image), landmarks, refined_bboxes)
+            # import pdb; pdb.set_trace()
+            for i, track in enumerate(output_tracks):
+                frame, track_id, bb_left, bb_top, bb_width, bb_height, confidence, x, y, z = track
+                face = self.__extract_face(np.copy(image), landmarks[i], refined_bboxes[i])
+                result['faces'].append(face)
+                self.face_writers[track_id].append_data(face)       
         return result
 
     def __extract_face(self, image, landmarks, bbox):
