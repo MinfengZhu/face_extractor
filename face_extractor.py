@@ -30,23 +30,21 @@ class FaceExtrator:
                 PIL.Image.fromarray(result['vis']).save(f'{file_path[:-4]}_vis.png')
         elif filepath.endswith('.mp4') or filepath.endswith('.webm') or filepath.endswith('.avi'):
             ext = filepath.split('.')[-1]
-            filename = filepath[:-len(ext)]
-            reader = imageio.get_reader(filepath)
+            filename = filepath[:-len(ext) - 1]
+            reader = imageio.get_reader(filepath, "ffmpeg")
             fps = reader.get_meta_data()['fps']
             writer = imageio.get_writer(f'{filename}_vis.mp4', fps=5, quality=10, format='FFMPEG', codec='libx265', pixelformat='yuv444p')
             self.filename = filename
+            #import pdb; pdb.set_trace()
             self.face_writers = []
             with tqdm(total=reader.count_frames()) as pbar:
                 for frame_idx, image in enumerate(reader):
-                    if frame_idx < 500 or frame_idx > 1000 or frame_idx % 10 !=0:
+                    if frame_idx < 500 or frame_idx > 1000 or frame_idx % 20 !=0:
                         pbar.update(1)
                         continue
                     result = self.__extract_faces_from_image(image, vis=True)
-
-                    # for face_idx in range(result['n_faces']):
-                        # PIL.Image.fromarray(result['faces'][face_idx]).save(f'{filename}_{frame_idx}_{face_idx}.png')
                     if 'vis' in result.keys():
-                        PIL.Image.fromarray(result['vis']).save(f'{filename}_{frame_idx}_vis.png')
+                        #PIL.Image.fromarray(result['vis']).save(f'{filename}_{frame_idx}_vis.png')
                         writer.append_data(result['vis'])
                     pbar.update(1)
                 writer.close()
@@ -81,7 +79,8 @@ class FaceExtrator:
         image_det = image_det.resize((int(image_det.size[0] *1.0 / det_scale), int(image_det.size[1] * 1.0 / det_scale)))
         image_det = np.array(image_det)
         landmarks = self.fa.get_landmarks(np.copy(image_det), detected_faces=bboxes / det_scale)
-        landmarks *= det_scale
+        landmarks = np.array(landmarks)
+        landmarks = landmarks * det_scale
         return landmarks
        
     def __extract_faces_from_image(self, image, vis=False):
@@ -198,6 +197,6 @@ class FaceExtrator:
 if __name__ == "__main__":
     fe = FaceExtrator()
     # fe.get_faces('./results/girls.jpg')
-    fe.get_faces('results/Interview with My Twin Brother.mp4')
-    # fe.get_faces('https://www.youtube.com/watch?v=8ZKzx1C4-DY')
+    # fe.get_faces('results/Interview with My Twin Brother.mp4')
+    fe.get_faces('https://www.youtube.com/watch?v=8ZKzx1C4-DY')
 

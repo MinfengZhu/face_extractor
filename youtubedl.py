@@ -21,6 +21,7 @@ class YouTubeDownloader:
         with youtube_dl.YoutubeDL(self.ydl_opts) as ydl:
             result = ydl.extract_info("{}".format(url), download=True)
             filename = ydl.prepare_filename(result)
+            #filename = ''.join(filename.split(".")[:-1]) + '.mp4'
             return filename
             #ydl.download([url])
 
