@@ -33,13 +33,13 @@ class FaceExtrator:
             filename = filepath[:-len(ext) - 1]
             reader = imageio.get_reader(filepath, "ffmpeg")
             fps = reader.get_meta_data()['fps']
-            writer = imageio.get_writer(f'{filename}_vis.mp4', fps=5, quality=10, format='FFMPEG', codec='libx265', pixelformat='yuv444p')
+            writer = imageio.get_writer(f'{filename}_vis.mp4', fps=fps, quality=10, format='FFMPEG', codec='libx265', pixelformat='yuv444p')
             self.filename = filename
             #import pdb; pdb.set_trace()
             self.face_writers = []
             with tqdm(total=reader.count_frames()) as pbar:
                 for frame_idx, image in enumerate(reader):
-                    if frame_idx < 500 or frame_idx > 1000 or frame_idx % 20 !=0:
+                    if frame_idx < 500 or frame_idx > 1000:# or frame_idx % 20 !=0:
                         pbar.update(1)
                         continue
                     result = self.__extract_faces_from_image(image, vis=True)
